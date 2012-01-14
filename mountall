@@ -1,0 +1,11 @@
+#!/bin/bash
+mount -o loop root.img mnt/
+
+mkdir -p mnt/proc
+mount -t proc proc mnt/proc  # for bash completion
+
+mkdir -p mnt/dev
+mount --bind /dev mnt/dev
+
+mkdir -p mnt/sys
+mount -t sysfs sysfs mnt/sys

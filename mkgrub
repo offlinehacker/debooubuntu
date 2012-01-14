@@ -1,0 +1,30 @@
+#!/bin/bash
+# Enable aliases in shell scripts
+shopt -s expand_aliases
+alias ch="chroot mnt/"
+alias chins="chroot mnt/ apt-get install -y"
+
+echo "This part only works in phisically mounted filesystem, because of bug in grub2."
+echo "We are about to copy files to flash drive, press any key when ready."
+read key
+dd if=root.img of=$ROOT
+echo "Copy complete...."
+echo "Mounting physicall filesystem."
+./unmountall
+mount $ROOT mnt/
+mkdir -p mnt/proc
+mount -t proc proc mnt/proc  # for bash completion
+mkdir -p mnt/dev
+mount --bind /dev mnt/dev
+mkdir -p mnt/sys
+mount -t sysfs sysfs mnt/sys
+
+echo "Installing grub, select your device when promted..."
+chins grub-pc
+
+echo "done :)."
+echo "Unmounting everything"
+./unmountall
+
+echo "Copying root.img back from flash drive to local"
+dd if=$ROOT of=root.img

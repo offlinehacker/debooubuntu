@@ -1,0 +1,11 @@
+#!/bin/bash
+echo "Writing fstab........"
+echo "ROOT is on $ROOT"
+echo "SWAP in on $SWAP"
+echo "HOME is on $HOME"
+cat > mnt/etc/fstab <<EOF
+# device mount   type options freq passno
+UUID=$(blkid -o value -s UUID $ROOT) /       ext4 errors=remount-ro,user_xattr 0 1
+UUID=$(blkid -o value -s UUID $SWAP) none    swap    sw                        0 0
+UUID=$(blkid -o value -s UUID $HOME) /home   ext4 defaults                     0 0
+EOF

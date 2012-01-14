@@ -1,0 +1,6 @@
+#!/bin/bash
+
+ROOTDEV=/dev/sdb
+
+echo "Flashing root...."
+dd if=root.img of=$ROOTDEV1
