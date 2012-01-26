@@ -97,8 +97,19 @@ ch apt-get update
 echo "Installing packages........."
 chins vim nano screen
 chins lxc vlan bridge-utils
+chins unattended-upgrades
 
 chins linux-image
+
+echo "Enabling automatic updates"
+cat >> mnt/etc/apt/apt.conf.d/10periodic <<EOF
+APT::Periodic::Enable "1";
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::AutocleanInterval "5";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::RandomSleep "1800";
+EOF
 
 echo "Do you want me to write my default network config? yes/no"
 read answer
