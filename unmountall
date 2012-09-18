@@ -1,7 +1,0 @@
-#!/bin/bash
-umount mnt/proc  # for bash completion
-umount mnt/dev
-umount mnt/sys
-
-umount mnt/
-

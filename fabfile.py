@@ -1,56 +1,83 @@
 import os
 import fabric.api
-from fabric.api import task, execute, env
+from fabric.api import task, execute, env, run, sudo
 from fabric.utils import puts, warn, error
 from fabric.contrib.console import confirm
-from fabric.context_managers import settings
+from fabric.contrib.files import exists
+from fabric.context_managers import settings, cd
 
-def local(cmd, use_sudo=False):
-    if use_sudo:
-        return fabric.api.local("sudo "+cmd)
-    else:
-        return fabric.api.local(cmd)
+def chroot(cmd):
+    return sudo("chroot mnt/ %s" %cmd)
+
+def chins(cmd):
+    return sudo("chroot mnt/ apt-get install -y %s" %cmd)
+
+def chbash(cmd):
+    return sudo("echo '%s' | sudo bash" %cmd)
+
+def root():
+    if env.get("root"):
+        return cd(env.get("root"))
+    return cd(".")
 
 @task
 def prepare( size=2000 ):
-    if os.path.exists("root.img"):
+    if exists("root.img"):
         if not confirm("Do you want to create new image?"):
             return
 
     local("dd if=/dev/zero of=root.img bs=1024k count=%d"% size)
-    local("mkfs.ext4 -L root root.img")
+    local("mkfs.ext4 -F -L root root.img")
 
     if not os.path.exists("mnt"):
         local("mkdir -p mnt")
 
 @task
-def mount():
-    if not os.path.exists("root.img"):
-        if confirm("Root image does not seem to exist, create one?"):
-            prepare()
+def resize( new_size=1800 ):
+    mount(False)
+    run("dd if=/dev/zero of=tmp.img bs=1024k count=%d"% new_size)
+    run("mkfs.ext4 -F -L ubuntu tmp.img")
+    run("mkdir -p tmp")
+    sudo("mount -o loop tmp.img tmp/")
+    sudo("cp -rv mnt/* ./tmp/")
+    execute(unmount)
+    run("rm root.img")
+    sudo("umount tmp.img")
+    run("mv tmp.img root.img")
 
-    if not os.path.exists("mnt"):
-        local("mkdir -p mnt")
+@task
+def mount(devices=True):
+    if not exists("root.img"):
+        if confirm("Root image does not seem to exist, create one?"):
+            execute(prepare)
+
+    local("mkdir -p mnt")
 
     execute(unmount)
-    local("mount -o loop root.img mnt/", use_sudo=True)
-    local("mkdir -p mnt/proc", use_sudo=True)
-    local("mount -t proc proc mnt/proc", use_sudo=True)
-    local("mkdir -p mnt/dev", use_sudo=True)
-    local("mount --bind /dev mnt/dev", use_sudo=True)
-    local("mkdir -p mnt/sys", use_sudo=True)
-    local("mount -t sysfs sysfs mnt/sys", use_sudo=True)
+    sudo("mount -o loop root.img mnt/")
+    if devices:
+        sudo("mkdir -p mnt/proc")
+        sudo("mount -t proc proc mnt/proc")
+        sudo("mkdir -p mnt/dev")
+        sudo("mount --bind /dev mnt/dev")
+        sudo("mkdir -p mnt/sys")
+        sudo("mount -t sysfs sysfs mnt/sys")
+        sudo("mount -t devpts /dev/pts mnt/dev/pts")
 
 @task
 def unmount():
     with settings(warn_only=True):
-        local("umount mnt/proc", use_sudo=True)
-        local("umount mnt/sys", use_sudo=True)
-        local("umount mnt/sys", use_sudo=True)
-        local("umount mnt/")
+        sudo("sudo lsof -t mnt/ | sudo xargs -r kill")
+        sudo("sudo chroot mnt/ /etc/init.d/udev stop")
+        sudo("sudo chroot mnt/ /etc/init.d/cron stop")
+        sudo("umount mnt/proc")
+        sudo("umount mnt/sys")
+        sudo("umount mnt/dev/pts")
+        sudo("umount mnt/dev")
+        sudo("umount mnt/")
 
 @task
-def install(release= None, target= None, mirror= None, target_arch= None, password= None):
+def debootstrap(release= None, target= None, mirror= None, target_arch= None, password= None):
     opts = dict(
             release= release or env.get("release") or "oneiric",
             target= target or env.get("target") or "mnt",
@@ -59,8 +86,8 @@ def install(release= None, target= None, mirror= None, target_arch= None, passwo
             password= password or env.get("password") or "root"
             )
 
-    if not os.path.exists("mnt/dev"):
-        if not os.path.exists("root.img"):
+    if not exists("mnt/dev"):
+        if not exists("root.img"):
             warn("Your image does not seem to exist...")
             if confirm("Should i create one?"):
                 execute(prepare)
@@ -74,18 +101,20 @@ def install(release= None, target= None, mirror= None, target_arch= None, passwo
          target=%(target)s mirror=%(mirror)s
          target_arch=%(target_arch)s""" % opts)
     with settings(warn_only=True):
-        ret= local("debootstrap --arch %(target_arch)s %(release)s %(target)s %(mirror)s" % opts,
-         use_sudo= True)
+        ret= sudo("debootstrap --arch %(target_arch)s %(release)s %(target)s %(mirror)s" % opts)
 
         if ret.return_code!=2 and ret.return_code==0:
             error("Problem running debootstrap!")
 
-    chroot= lambda x: local("chroot mnt/ "+ x, use_sudo=True)
-    chins= lambda x: local("chroot mnt/ apt-get install -y", use_sudo=True)
-    chbash = lambda x: local("echo '%s' | sudo bash" % x)
+@task
+def install(password= None, start_ssh=True):
+    opts = dict(
+            password= password or env.get("password") or "root",
+            start_ssh= start_ssh or env.get("start_ssh")
+            )
 
     puts("Configuring...")
-    if not os.path.exists("templates/sources.list"):
+    if not exists("templates/sources.list"):
         chbash("""cat >> mnt/etc/apt/sources.list <<EOF
 deb http://archive.ubuntu.com/ubuntu $(lsb_release -cs) main restricted universe multiverse
 deb http://archive.ubuntu.com/ubuntu $(lsb_release -cs)-security main restricted universe multiverse
@@ -94,12 +123,12 @@ deb http://archive.canonical.com/ubuntu $(lsb_release -cs) partner
 EOF\n
                """)
     else:
-        local("cp templates/sources.list mnt/etc/apt/sources.list", use_sudo=True)
-    if not os.path.exists("templates/interfaces"):
+        sudo("cp templates/sources.list mnt/etc/apt/sources.list")
+    if not exists("templates/interfaces"):
         pass
     else:
-        local("cp templates/intefaces mnt/etc/network/interfaces", use_sudo=True)
-    local("cp /etc/mtab mnt/etc/mtab", use_sudo=True)
+        sudo("cp templates/intefaces mnt/etc/network/interfaces")
+    sudo("cp /etc/mtab mnt/etc/mtab")
     chbash("""cat >> mnt/etc/apt/apt.conf.d/10periodic <<EOF
 APT::Periodic::Enable "1";
 APT::Periodic::Update-Package-Lists "1";
@@ -109,13 +138,24 @@ APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::RandomSleep "1800";
 EOF\n
            """)
-    chroot("echo \"%(password)s\" | passwd --stdin" % opts)
+    chroot("passwd << EOF\n%(password)s\n%(password)s\nEOF\n" % opts)
 
     puts("Installing packages...")
     chroot("apt-get update -y")
-    chroot("linux-image")
-    chins("""vim nano joe screen htop unattended-upgrades python-software-properties
-             mdadm lvm2 smartmontools nmap ntp traceroute ssh""")
+    chins("linux-image")
+
+    chins("udev")
+    chbash("echo \"none /dev/pts devpts defaults 0 0\" >> mnt/etc/fstab")
+    chbash("echo \"none /proc proc defaults\" >> mnt/etc/fstab")
+
+    chins("vim nano joe screen unattended-upgrades \
+    	   smartmontools ntp ssh openssh-server")
+
+    sudo("sudo lsof -t mnt/ | sudo xargs -r kill")
+
+    if opts["start_ssh"]:
+        chbash("sed -i \"s/Port 22/Port 23/g\" mnt/etc/ssh/sshd_config")
+        chroot("/etc/init.d/ssh start")
 
 @task
 def flash(root= None, swap= None, home= None):
@@ -124,10 +164,6 @@ def flash(root= None, swap= None, home= None):
             swap= swap or env.get("swap") or "/dev/sdb2",
             home= home or env.get("home") or None
             )
-    chins= lambda x: local("chroot mnt/ apt-get install -y", use_sudo=True)
-    chroot= lambda x: local("chroot mnt/ "+ x, use_sudo=True)
-    chbash = lambda x: local("echo '%s' | sudo bash" % x)
-
     if not os.path.exists("mnt/dev"):
         if not os.path.exists("root.img"):
             error("Your image does not seem to exist...")
@@ -156,11 +192,11 @@ EOF\n
     chbash(fstab)
 
     puts("Writing image to flash drive...")
-    local("dd if=root.img of=%(root)s" %opts, use_sudo=True)
+    sudo("dd if=root.img of=%(root)s" %opts)
 
     puts("Installing grub...")
     chins("grub-pc")
     execute(unmount)
 
     puts("Writing image back...")
-    local("dd if=%(root)s of=root.img", use_sudo=True)
+    sudo("dd if=%(root)s of=root.img")

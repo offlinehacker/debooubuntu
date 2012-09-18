@@ -1,6 +1,0 @@
-#!/bin/bash
-dd if=/dev/zero of=root.img bs=1024k count=2000
-
-mkfs.ext4 -L root root.img
-
-mkdir -p mnt
